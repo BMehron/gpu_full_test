@@ -562,6 +562,16 @@ def main():
     rank, world = init_dist()
     cfg = json.loads(args.config)
 
+    if rank == 0:
+        print(f"\n=== Single-Node Tests (world_size={world}) ===", flush=True)
+        print("  Initializing NCCL …", flush=True)
+    _w = torch.zeros(1, device=f"cuda:{rank}")
+    dist.all_reduce(_w)
+    torch.cuda.synchronize()
+    del _w
+    if rank == 0:
+        print("  NCCL ready.", flush=True)
+
     sym = {PASS: "✓", FAIL: "✗", WARN: "△"}
     all_results = []
 
@@ -576,9 +586,6 @@ def main():
             msg = r["details"] if r["details"] else r["error"]
             print(f"  [{tag}] {r['name']:<40} {msg}", flush=True)
         return r
-
-    if rank == 0:
-        print(f"\n=== Single-Node Tests (world_size={world}) ===")
 
     run(lambda: test_nvlink_ring_bandwidth(rank, world, cfg.get("nvlink_data_gb", 1.0)))
     run(lambda: test_nvlink_latency(rank, world))
