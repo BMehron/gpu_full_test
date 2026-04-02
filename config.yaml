@@ -1,0 +1,45 @@
+# GPU Test Suite — edit this file to configure your cluster
+# Run: python run_tests.py [--skip-per-gpu] [--skip-single-node] [--skip-multi-node]
+
+repo_url: "https://github.com/BMehron/gpu_full_test.git"
+
+nodes:
+  - host: ""           # Node 1 IP
+    user: "ubuntu"              # SSH username
+    key_file: "~/.ssh/id_ed25519"  # Path to your SSH private key
+  - host: ""           # Node 2 IP
+    user: "ubuntu"
+    key_file: "~/.ssh/id_ed25519"
+  - host: ""           # Node 3 IP
+    user: "ubuntu"
+    key_file: "~/.ssh/id_ed25519"
+
+gpus_per_node: 8
+
+# Port for torchrun rendezvous — must be open between all nodes
+master_port: 29500
+
+# Remote working directory on each node (repo is cloned here)
+remote_work_dir: "~/gpu_full_test"
+
+tests:
+  # Per-GPU tests
+  memory_fraction: 0.5             # Fraction of VRAM to allocate (0.5 = 50%)
+  matmul_size: 8192                # Square matrix dim for MatMul / TFLOPS tests
+  bandwidth_data_gb: 2.0           # Payload size for PCIe H2D/D2H tests
+  hbm_data_gb: 4.0                 # Payload size for HBM bandwidth test
+  tflops_iters: 200                # Iterations for BF16 TFLOPS benchmark
+  h200_peak_bf16_tflops: 1979.0   # H200 rated peak BF16 TFLOPS (spec sheet)
+
+  # Intra-node distributed tests
+  nvlink_data_gb: 4.0              # Payload size for NVLink P2P tests
+
+  # Both intra- and inter-node collective tests
+  allreduce_sizes_mb: [64, 256, 1024, 4096]   # AllReduce sweep sizes (MB)
+
+  # DDP training test
+  ddp_hidden_size: 4096            # MLP hidden dimension
+  ddp_steps: 50                    # Training steps to run
+
+# Where to save collected results locally
+results_dir: "./results"
