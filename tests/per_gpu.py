@@ -10,13 +10,13 @@ The orchestrator launches one process per GPU in parallel.
 
 import argparse
 import json
-import math
 import sys
 import time
 import traceback
-from typing import Any, Dict, List
+from typing import Dict, List
 
 import torch
+import torch.nn as nn
 
 
 PASS = "PASS"
@@ -315,6 +315,94 @@ def test_mixed_precision_correctness(gpu_id: int) -> Dict:
 
 
 # ---------------------------------------------------------------------------
+# Test: Single-GPU training loop
+# ---------------------------------------------------------------------------
+
+def save_loss_plot(losses: List[float], title: str, output_json_path: str):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(losses)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("MSE Loss")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plot_path = output_json_path.replace(".json", "_loss.png")
+        fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Loss plot saved: {plot_path}", flush=True)
+    except ImportError:
+        pass
+
+
+class SimpleMLP(nn.Module):
+    def __init__(self, hidden: int = 1024):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden, hidden), nn.GELU(),
+            nn.Linear(hidden, hidden), nn.GELU(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+def test_training(gpu_id: int, hidden: int = 1024, steps: int = 50,
+                  batch_size: int = 64) -> Dict:
+    """
+    Single-GPU training loop on a linear target y = X @ w.
+    Verifies the GPU can run a full forward/backward/optimizer cycle
+    and that loss drops by ≥50% over `steps` steps.
+    """
+    try:
+        device = torch.device(f"cuda:{gpu_id}")
+        torch.manual_seed(42)
+
+        model = SimpleMLP(hidden).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        criterion = nn.MSELoss()
+
+        torch.manual_seed(0)
+        w = torch.randn(hidden, 1, device=device)
+        X = torch.randn(batch_size, hidden, device=device)
+        y = X @ w
+
+        losses = []
+        t0 = time.perf_counter()
+        for _ in range(steps):
+            optimizer.zero_grad()
+            out = model(X)
+            loss = criterion(out, y)
+            loss.backward()
+            optimizer.step()
+            losses.append(round(loss.item(), 6))
+        torch.cuda.synchronize(device)
+        elapsed = time.perf_counter() - t0
+
+        del model, optimizer, X, y, w
+        torch.cuda.empty_cache()
+
+        first_loss, last_loss = losses[0], losses[-1]
+        relative_drop = (first_loss - last_loss) / (first_loss + 1e-8)
+        throughput = batch_size * steps / elapsed
+        status = PASS if relative_drop >= 0.5 else FAIL
+        return result("training", status,
+                      metrics={"first_loss": first_loss,
+                                "last_loss": last_loss,
+                                "relative_drop_pct": round(relative_drop * 100, 1),
+                                "throughput_samples_per_s": round(throughput, 1),
+                                "steps": steps,
+                                "step_losses": losses},
+                      details=f"loss {first_loss:.4f}→{last_loss:.4f} "
+                              f"({relative_drop*100:.1f}% drop) | {throughput:.0f} samples/s")
+    except Exception:
+        return result("training", FAIL, error=traceback.format_exc())
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -334,6 +422,8 @@ def run_all(gpu_id: int, cfg: Dict) -> Dict:
                                   size=cfg.get("matmul_size", 8192),
                                   peak_tflops=cfg.get("h200_peak_bf16_tflops", 1979.0)),
         lambda: test_mixed_precision_correctness(gpu_id),
+        lambda: test_training(gpu_id, hidden=cfg.get("ddp_hidden_size", 1024),
+                               steps=cfg.get("ddp_steps", 50)),
     ]
 
     sym = {PASS: "✓", FAIL: "✗", WARN: "△"}
@@ -377,6 +467,10 @@ def main():
 
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
+    for t in results["tests"]:
+        losses = t.get("metrics", {}).get("step_losses")
+        if losses:
+            save_loss_plot(losses, f"GPU{args.gpu_id} {t['name']}", args.output)
 
 
 if __name__ == "__main__":

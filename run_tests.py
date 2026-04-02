@@ -168,6 +168,11 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
         if rc2 != 0:
             print(f"  [{host}] GPU{gpu_id} scp failed: {err2}")
             return {"gpu_id": gpu_id, "error": err2, "tests": [], "summary": {}}
+        png_remote = out_remote.replace(".json", "_loss.png")
+        png_local  = str(local_out).replace(".json", "_loss.png")
+        rc3, _ = await scp_from(host, user, key, png_remote, png_local)
+        if rc3 == 0:
+            print(f"  [{host}] GPU{gpu_id} loss plot: {png_local}", flush=True)
         with open(local_out) as f:
             return json.load(f)
 
