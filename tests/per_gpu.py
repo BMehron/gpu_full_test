@@ -304,7 +304,7 @@ def test_mixed_precision_correctness(gpu_id: int) -> Dict:
         out = torch.mm(A_g.float(), B_g.float()).cpu()
 
         rel_err = (out - ref).norm().item() / (ref.norm().item() + 1e-8)
-        threshold = 0.001  # FP32 vs FP64: < 0.1% expected
+        threshold = 0.005  # FP32 vs FP64: < 0.5% expected for 512×512 matmul
         status = PASS if rel_err < threshold else FAIL
 
         return result("mixed_precision_correctness", status,

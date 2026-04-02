@@ -65,7 +65,7 @@ async def ssh(host: str, user: str, key: str, cmd: str,
 
 
 async def ssh_stream(host: str, user: str, key: str, cmd: str,
-                     timeout: int = 600) -> Tuple[int, str]:
+                     timeout: int = 600, prefix: str = "") -> Tuple[int, str]:
     """Run `cmd` on remote host, printing stdout line by line as it arrives."""
     key = os.path.expanduser(key)
     proc = await asyncio.create_subprocess_exec(
@@ -80,7 +80,7 @@ async def ssh_stream(host: str, user: str, key: str, cmd: str,
     try:
         async def read_stdout():
             async for line in proc.stdout:
-                print(line.decode(), end="", flush=True)
+                print(f"{prefix}{line.decode()}", end="", flush=True)
 
         async def read_stderr():
             return (await proc.stderr.read()).decode()
@@ -159,7 +159,7 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
                f"--gpu-id {gpu_id} "
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
-        rc, stderr = await ssh_stream(host, user, key, cmd, timeout=300)
+        rc, stderr = await ssh_stream(host, user, key, cmd, timeout=300, prefix=f"  [{host}] ")
         if rc != 0:
             print(f"  [{host}] GPU{gpu_id} FAILED:\n{stderr}")
             return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}
