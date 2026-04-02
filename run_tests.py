@@ -64,6 +64,37 @@ async def ssh(host: str, user: str, key: str, cmd: str,
         return -1, "", f"SSH command timed out after {timeout}s"
 
 
+async def ssh_stream(host: str, user: str, key: str, cmd: str,
+                     timeout: int = 600) -> Tuple[int, str]:
+    """Run `cmd` on remote host, printing stdout line by line as it arrives."""
+    key = os.path.expanduser(key)
+    proc = await asyncio.create_subprocess_exec(
+        "ssh", "-i", key,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        f"{user}@{host}", cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        async def read_stdout():
+            async for line in proc.stdout:
+                print(line.decode(), end="", flush=True)
+
+        async def read_stderr():
+            return (await proc.stderr.read()).decode()
+
+        _, stderr = await asyncio.wait_for(
+            asyncio.gather(read_stdout(), read_stderr()), timeout=timeout
+        )
+        await proc.wait()
+        return proc.returncode, stderr
+    except asyncio.TimeoutError:
+        proc.kill()
+        return -1, f"SSH command timed out after {timeout}s"
+
+
 
 async def scp_from(host: str, user: str, key: str,
                    remote: str, local: str) -> Tuple[int, str]:
@@ -128,8 +159,7 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
                f"--gpu-id {gpu_id} "
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
-        rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=300)
-        print(stdout, end="", flush=True)
+        rc, stderr = await ssh_stream(host, user, key, cmd, timeout=300)
         if rc != 0:
             print(f"  [{host}] GPU{gpu_id} FAILED:\n{stderr}")
             return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}
