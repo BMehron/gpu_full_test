@@ -31,8 +31,6 @@ nodes:
 
 gpus_per_node: 8
 master_port: 29500
-remote_work_dir: "~/gpu_full_test"
-repo_url: "https://github.com/BMehron/gpu_full_test.git"
 ```
 
 ### 2. Install local dependencies
