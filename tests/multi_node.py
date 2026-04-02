@@ -455,6 +455,9 @@ def main():
 
     def run(fn):
         r = fn()
+        dist.barrier()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
         if r is not None:
             all_results.append(r)
             tag = sym.get(r["status"], "?")

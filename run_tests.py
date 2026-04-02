@@ -129,23 +129,20 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
         rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=300)
-        print(stdout, end="", flush=True)
         if rc != 0:
-            print(f"  [{host}] GPU{gpu_id} per_gpu FAILED:\n{stderr}")
-            return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}
-
-        # Fetch result
+            return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}, stdout
         local_out = results_dir / f"{host}_gpu{gpu_id}.json"
         rc2, err2 = await scp_from(host, user, key, out_remote, str(local_out))
         if rc2 != 0:
-            print(f"  [{host}] GPU{gpu_id} scp failed: {err2}")
-            return {"gpu_id": gpu_id, "error": err2, "tests": [], "summary": {}}
-
+            return {"gpu_id": gpu_id, "error": err2, "tests": [], "summary": {}}, stdout
         with open(local_out) as f:
-            return json.load(f)
+            return json.load(f), stdout
 
-    tasks = [run_one(g) for g in gpu_ids]
-    return await asyncio.gather(*tasks)
+    pairs = await asyncio.gather(*[run_one(g) for g in gpu_ids])
+    # Print all GPU output for this node together, sorted by gpu_id
+    for data, stdout in sorted(pairs, key=lambda p: p[0].get("gpu_id", 0)):
+        print(stdout, end="", flush=True)
+    return [data for data, _ in pairs]
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +166,8 @@ async def run_single_node(node: Dict, gpus_per_node: int,
 
     print(f"\n  [{host}] Running single-node tests …")
     rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=600)
-    print(stdout, end="", flush=True)
+    for line in stdout.splitlines():
+        print(f"  [{host}] {line}")
     if rc != 0:
         print(f"  [{host}] single_node FAILED:\n{stderr}")
         return {"host": host, "error": stderr}
@@ -221,7 +219,8 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
 
         print(f"  [{host}] Launching multi-node torchrun (node_rank={idx}) …")
         rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=900)
-        print(stdout, end="", flush=True)
+        for line in stdout.splitlines():
+            print(f"  [{host}] {line}")
         if rc != 0:
             print(f"  [{host}] multi_node FAILED:\n{stderr}")
         return rc, host

@@ -33,19 +33,15 @@ def result(name: str, status: str, metrics: Dict = None, details: str = "", erro
 
 
 def cuda_time_ms(fn, iters: int, device) -> float:
-    """Return average kernel time in ms using CUDA events (accurate, no Python overhead)."""
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    # Warmup
+    """Return average kernel time in ms using wall-clock time after GPU sync."""
     for _ in range(max(3, iters // 10)):
         fn()
     torch.cuda.synchronize(device)
-    start.record()
+    t0 = time.perf_counter()
     for _ in range(iters):
         fn()
-    end.record()
     torch.cuda.synchronize(device)
-    return start.elapsed_time(end) / iters  # ms per iter
+    return (time.perf_counter() - t0) / iters * 1000
 
 
 # ---------------------------------------------------------------------------
@@ -94,12 +90,11 @@ def test_matmul_correctness(gpu_id: int, size: int = 8192) -> Dict:
         B_g = B_f.to(device=device, dtype=torch.bfloat16)
         out = (A_g @ B_g).float().cpu()
 
-        rel_err = ((out - ref).abs() / (ref.abs() + 1e-6))
-        mean_rel = rel_err.mean().item()
-        max_rel  = rel_err.max().item()
+        # Frobenius norm relative error avoids explosion on near-zero elements
+        rel_err = (out - ref).norm().item() / (ref.norm().item() + 1e-8)
 
         threshold = 0.02
-        status = PASS if max_rel < threshold else FAIL
+        status = PASS if rel_err < threshold else FAIL
 
         # Large-matrix throughput (just timing, no CPU reference)
         A_l = torch.randn(size, size, dtype=torch.bfloat16, device=device)
@@ -111,12 +106,11 @@ def test_matmul_correctness(gpu_id: int, size: int = 8192) -> Dict:
         torch.cuda.empty_cache()
 
         return result("matmul_correctness", status,
-                      metrics={"max_rel_err": round(max_rel, 6),
-                                "mean_rel_err": round(mean_rel, 6),
+                      metrics={"frobenius_rel_err": round(rel_err, 6),
                                 "threshold": threshold,
                                 "large_matmul_tflops_bf16": round(tflops, 1),
                                 "matrix_size": size},
-                      details=f"max_rel_err={max_rel:.4%} (thr {threshold:.0%}) | "
+                      details=f"frobenius_rel_err={rel_err:.4%} (thr {threshold:.0%}) | "
                               f"large matmul {tflops:.1f} TFLOPS BF16")
     except Exception:
         return result("matmul_correctness", FAIL, error=traceback.format_exc())
@@ -309,13 +303,13 @@ def test_mixed_precision_correctness(gpu_id: int) -> Dict:
         # Use float32 accumulation via torch.mm on bf16 inputs
         out = torch.mm(A_g.float(), B_g.float()).cpu()
 
-        max_rel = ((out - ref).abs() / (ref.abs() + 1e-6)).max().item()
+        rel_err = (out - ref).norm().item() / (ref.norm().item() + 1e-8)
         threshold = 0.001  # FP32 vs FP64: < 0.1% expected
-        status = PASS if max_rel < threshold else FAIL
+        status = PASS if rel_err < threshold else FAIL
 
         return result("mixed_precision_correctness", status,
-                      metrics={"max_rel_err_fp32_vs_fp64": round(max_rel, 8), "threshold": threshold},
-                      details=f"FP32 accum vs FP64 ref: max_rel_err={max_rel:.6%}")
+                      metrics={"frobenius_rel_err_fp32_vs_fp64": round(rel_err, 8), "threshold": threshold},
+                      details=f"FP32 accum vs FP64 ref: frobenius_rel_err={rel_err:.6%}")
     except Exception:
         return result("mixed_precision_correctness", FAIL, error=traceback.format_exc())
 
@@ -347,6 +341,8 @@ def run_all(gpu_id: int, cfg: Dict) -> Dict:
     for fn in tests:
         r = fn()
         results.append(r)
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(device)
         tag = sym.get(r["status"], "?")
         msg = r["details"] if r["details"] else r["error"]
         print(f"  GPU{gpu_id} [{tag}] {r['name']:<35} {msg}", flush=True)

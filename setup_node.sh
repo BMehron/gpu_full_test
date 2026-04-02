@@ -16,8 +16,11 @@ fi
 echo "[setup] Creating venv..."
 [ -d "$WORK_DIR/venv" ] || python3 -m venv "$WORK_DIR/venv"
 
+echo "[setup] Activating venv..."
+source "$WORK_DIR/venv/bin/activate
+
 echo "[setup] Installing dependencies..."
-"$WORK_DIR/venv/bin/pip" install -q --upgrade pip
-"$WORK_DIR/venv/bin/pip" install -q -r "$WORK_DIR/requirements.txt"
+pip install -q --upgrade pip
+pip install -q -r "$WORK_DIR/requirements.txt"
 
 echo "[setup] Done."
