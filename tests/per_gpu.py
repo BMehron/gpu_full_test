@@ -359,14 +359,15 @@ def test_training(gpu_id: int, hidden: int = 1024, steps: int = 50,
     """
     try:
         device = torch.device(f"cuda:{gpu_id}")
-        torch.manual_seed(42)
+        torch.manual_seed(42 + gpu_id)
 
         model = SimpleMLP(hidden).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
 
-        torch.manual_seed(0)
+        torch.manual_seed(0)                                      # same target function on all GPUs
         w = torch.randn(hidden, 1, device=device)
+        torch.manual_seed(100 + gpu_id)                           # different samples per GPU
         X = torch.randn(batch_size, hidden, device=device)
         y = X @ w
 

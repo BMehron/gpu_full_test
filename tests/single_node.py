@@ -142,9 +142,9 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
         optimizer = torch.optim.Adam(ddp_model.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
 
-        # Linear relationship y = X @ w guarantees loss decreases
-        torch.manual_seed(0)
+        torch.manual_seed(0)                                      # same target function on all ranks
         w = torch.randn(hidden, 1, device=device)
+        torch.manual_seed(100 + rank)                             # different samples per rank
         X = torch.randn(batch_size, hidden, device=device)
         y = X @ w
 
