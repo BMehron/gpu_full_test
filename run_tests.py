@@ -206,8 +206,13 @@ async def run_single_node(node: Dict, gpus_per_node: int,
     rc2, err2 = await scp_from(host, user, key, out_remote, str(local_out))
     if rc2 != 0:
         return {"host": host, "error": err2}
-    await scp_from(host, user, key, out_remote.replace(".json", "_loss.png"),
-                   str(local_out).replace(".json", "_loss.png"))
+    png_remote = out_remote.replace(".json", "_loss.png")
+    png_local  = str(local_out).replace(".json", "_loss.png")
+    rc3, err3 = await scp_from(host, user, key, png_remote, png_local)
+    if rc3 == 0:
+        print(f"  [{host}] Loss plot: {png_local}", flush=True)
+    else:
+        print(f"  [{host}] Loss plot not fetched: {err3}", flush=True)
 
     with open(local_out) as f:
         data = json.load(f)
@@ -277,9 +282,14 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
                               master_node["key_file"], out_remote, str(local_out))
     if rc != 0:
         return {"error": f"scp from master failed: {err}"}
-    await scp_from(master_node["host"], master_node["user"], master_node["key_file"],
-                   out_remote.replace(".json", "_loss.png"),
-                   str(local_out).replace(".json", "_loss.png"))
+    png_remote = out_remote.replace(".json", "_loss.png")
+    png_local  = str(local_out).replace(".json", "_loss.png")
+    rc2, err2 = await scp_from(master_node["host"], master_node["user"],
+                                master_node["key_file"], png_remote, png_local)
+    if rc2 == 0:
+        print(f"  [{master_node['host']}] Loss plot: {png_local}", flush=True)
+    else:
+        print(f"  [{master_node['host']}] Loss plot not fetched: {err2}", flush=True)
 
     with open(local_out) as f:
         return json.load(f)
@@ -467,6 +477,20 @@ async def main_async(args, cfg):
 
     print_summary(per_gpu_results, single_node_results, multi_node_result or {})
     print(f"\n  Full JSON results saved to: {results_dir.resolve()}\n")
+
+    # ── Step 6: Cleanup remote nodes ───────────────────────────────────────────
+    print_section("CLEANING UP REMOTE NODES")
+    async def cleanup_node(node):
+        host = node["host"]
+        user = node["user"]
+        key  = node["key_file"]
+        rc, _, err = await ssh(host, user, key, f"rm -rf {work_dir}", timeout=60)
+        if rc == 0:
+            print(f"  [{host}] Removed {work_dir}")
+        else:
+            print(f"  [{host}] Cleanup failed: {err}")
+
+    await asyncio.gather(*[cleanup_node(n) for n in nodes])
 
 
 def main():
