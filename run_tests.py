@@ -191,7 +191,7 @@ async def run_single_node(node: Dict, gpus_per_node: int,
     out_remote = f"{work_dir}/single_node.json"
 
     cmd = (f"cd {work_dir} && "
-           f"venv/bin/torchrun --standalone --nproc_per_node={gpus_per_node} "
+           f"PYTHONUNBUFFERED=1 venv/bin/torchrun --standalone --nproc_per_node={gpus_per_node} "
            f"tests/single_node.py "
            f"--config \"{cfg_json}\" "
            f"--output {out_remote}")
@@ -236,7 +236,7 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
         out_remote = f"{work_dir}/multi_node.json"
 
         cmd = (f"cd {work_dir} && "
-               f"venv/bin/torchrun "
+               f"PYTHONUNBUFFERED=1 venv/bin/torchrun "
                f"--nnodes={n_nodes} "
                f"--nproc_per_node={gpus_per_node} "
                f"--node_rank={idx} "

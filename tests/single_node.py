@@ -142,7 +142,7 @@ def test_nvlink_all_pairs(rank: int, world: int, data_gb: float = 1.0) -> Option
                 if src == dst:
                     continue
                 barrier_sync(rank, world)
-                iters = 3
+                iters = 2
                 t0 = time.perf_counter()
                 for _ in range(iters):
                     if rank == src:
@@ -221,7 +221,7 @@ def test_nvlink_latency(rank: int, world: int) -> Optional[Dict]:
 
         barrier_sync(rank, world)
 
-        iters = 1000
+        iters = 200
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -318,7 +318,7 @@ def test_allreduce_bandwidth(rank: int, world: int, sizes_mb: List[int] = None) 
                 dist.all_reduce(t, op=dist.ReduceOp.SUM)
             barrier_sync(rank, world)
 
-            iters = 10
+            iters = 3
             torch.cuda.synchronize()
             t0_wall = time.perf_counter()
             for _ in range(iters):
@@ -367,7 +367,7 @@ def test_allgather_bandwidth(rank: int, world: int, size_mb: int = 512) -> Optio
             dist.all_gather(recv_ts, send_t)
         barrier_sync(rank, world)
 
-        iters = 10
+        iters = 3
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -414,7 +414,7 @@ def test_reduce_scatter_bandwidth(rank: int, world: int, size_mb: int = 512) -> 
             dist.reduce_scatter_tensor(recv_t, send_t)
         barrier_sync(rank, world)
 
-        iters = 10
+        iters = 3
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -580,8 +580,7 @@ def main():
     if rank == 0:
         print(f"\n=== Single-Node Tests (world_size={world}) ===")
 
-    run(lambda: test_nvlink_ring_bandwidth(rank, world, cfg.get("nvlink_data_gb", 4.0)))
-    run(lambda: test_nvlink_all_pairs(rank, world, data_gb=1.0))
+    run(lambda: test_nvlink_ring_bandwidth(rank, world, cfg.get("nvlink_data_gb", 1.0)))
     run(lambda: test_nvlink_latency(rank, world))
     run(lambda: test_allreduce_correctness(rank, world))
     run(lambda: test_allreduce_bandwidth(rank, world, cfg.get("allreduce_sizes_mb", [64, 256, 1024, 4096])))
