@@ -125,7 +125,8 @@ class SimpleMLP(nn.Module):
 
 
 def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50,
-                      batch_size: int = 64) -> Optional[Dict]:
+                      batch_size: int = 64, threshold: float = 0.5,
+                      seed: int = 42) -> Optional[Dict]:
     """
     Full DDP training loop:
     1. Runs `steps` forward+backward+optimizer steps.
@@ -135,18 +136,19 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
     """
     try:
         device = torch.device(f"cuda:{rank}")
-        torch.manual_seed(42 + rank)
+        torch.manual_seed(seed)
 
-        model = SimpleMLP(hidden).to(device)
+        model     = SimpleMLP(hidden).to(device)
         ddp_model = DDP(model, device_ids=[rank])
         optimizer = torch.optim.Adam(ddp_model.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
 
-        torch.manual_seed(0)                                      # same target function on all ranks
-        w = torch.randn(hidden, 1, device=device)
-        torch.manual_seed(100 + rank)                             # different samples per rank
-        X = torch.randn(batch_size, hidden, device=device)
-        y = X @ w
+        # Fixed seed: generate full dataset then slice per rank → reproducible + different data per rank
+        torch.manual_seed(seed)
+        w     = torch.randn(hidden, 1, device=device)
+        X_all = torch.randn(batch_size * world, hidden, device=device)
+        X     = X_all[rank * batch_size:(rank + 1) * batch_size]
+        y     = X @ w
 
         first_loss = None
         last_loss = None
@@ -195,7 +197,7 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
             return None
 
         relative_drop = (first_loss - last_loss) / (first_loss + 1e-8)
-        status = PASS if (relative_drop >= 0.5 and grad_sync_ok) else FAIL
+        status = PASS if (relative_drop >= threshold and grad_sync_ok) else FAIL
         return result("ddp_training_single_node", status,
                       metrics={"first_loss": round(first_loss, 6),
                                 "last_loss": round(last_loss, 6),
@@ -255,7 +257,10 @@ def main():
     run(lambda: test_allreduce_correctness(rank, world))
     run(lambda: test_ddp_training(rank, world,
                                    hidden=cfg.get("ddp_hidden_size", 4096),
-                                   steps=cfg.get("ddp_steps", 20)))
+                                   steps=cfg.get("ddp_steps", 20),
+                                   batch_size=cfg.get("ddp_batch_size", 64),
+                                   threshold=cfg.get("ddp_loss_drop_threshold", 0.5),
+                                   seed=cfg.get("training_seed", 42)))
 
     dist.destroy_process_group()
 

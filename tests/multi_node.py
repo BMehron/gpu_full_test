@@ -120,12 +120,13 @@ def test_allreduce_correctness(rank, world, local_rank):
 # Test: Cross-node AllReduce bandwidth sweep
 # ---------------------------------------------------------------------------
 
-def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
+def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None, cfg=None):
     """
     Measures inter-node AllReduce bus bandwidth at multiple payload sizes.
     Bus BW formula: 2*(N-1)/N * size / time.
-    Threshold: 20 GB/s (conservative for 400 Gb/s IB / RoCE interconnect).
     """
+    if cfg is None:
+        cfg = {}
     if sizes_mb is None:
         sizes_mb = [64, 256, 1024]
 
@@ -160,7 +161,7 @@ def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
             return None
 
         min_bw = min(bw_results.values())
-        threshold = 2.0  # GB/s — scales with actual network (set higher for IB/RoCE clusters)
+        threshold = cfg.get("allreduce_threshold_gbps", 2.0)
         status = PASS if min_bw >= threshold else WARN
         details = " | ".join(f"{s}MB→{b}GB/s" for s, b in bw_results.items())
         return result("allreduce_bandwidth_multi_node", status,
@@ -190,28 +191,30 @@ class SimpleMLP(nn.Module):
         return self.net(x)
 
 
-def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size=64):
+def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size=64,
+                      threshold=0.5, seed=42):
     """
     Multi-node DDP training loop:
     1. Runs `steps` forward+backward+optimizer steps.
-    2. Verifies loss drops by ≥50% (linear target y = X @ w is perfectly learnable).
+    2. Verifies loss drops by ≥threshold (linear target y = X @ w is perfectly learnable).
     3. Checks gradient norms are identical across ALL ranks (cross-node allreduce).
     4. Reports cross-node throughput (samples/s).
     """
     try:
         device = torch.device(f"cuda:{local_rank}")
-        torch.manual_seed(42 + rank)
+        torch.manual_seed(seed)
 
-        model = SimpleMLP(hidden).to(device)
+        model     = SimpleMLP(hidden).to(device)
         ddp_model = DDP(model, device_ids=[local_rank])
         optimizer = torch.optim.Adam(ddp_model.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
 
-        torch.manual_seed(0)                                      # same target function on all ranks
-        w = torch.randn(hidden, 1, device=device)
-        torch.manual_seed(100 + rank)                             # different samples per rank
-        X = torch.randn(batch_size, hidden, device=device)
-        y = X @ w
+        # Fixed seed: generate full dataset then slice per rank → reproducible + different data per rank
+        torch.manual_seed(seed)
+        w     = torch.randn(hidden, 1, device=device)
+        X_all = torch.randn(batch_size * world, hidden, device=device)
+        X     = X_all[rank * batch_size:(rank + 1) * batch_size]
+        y     = X @ w
 
         first_loss = None
         last_loss = None
@@ -255,7 +258,7 @@ def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size
             return None
 
         relative_drop = (first_loss - last_loss) / (first_loss + 1e-8)
-        status = PASS if (relative_drop >= 0.5 and grad_sync_ok) else FAIL
+        status = PASS if (relative_drop >= threshold and grad_sync_ok) else FAIL
         return result("ddp_training_multi_node", status,
                       metrics={"first_loss": round(first_loss, 6),
                                 "last_loss": round(last_loss, 6),
@@ -314,10 +317,14 @@ def main():
 
     run(lambda: test_allreduce_correctness(rank, world, local_rank))
     run(lambda: test_allreduce_bandwidth(rank, world, local_rank,
-                                          sizes_mb=cfg.get("allreduce_sizes_mb", [64, 256, 1024])))
+                                          sizes_mb=cfg.get("allreduce_sizes_mb", [64, 256, 1024]),
+                                          cfg=cfg))
     run(lambda: test_ddp_training(rank, world, local_rank,
                                    hidden=cfg.get("ddp_hidden_size", 4096),
-                                   steps=cfg.get("ddp_steps", 20)))
+                                   steps=cfg.get("ddp_steps", 20),
+                                   batch_size=cfg.get("ddp_batch_size", 64),
+                                   threshold=cfg.get("ddp_loss_drop_threshold", 0.5),
+                                   seed=cfg.get("training_seed", 42)))
 
     dist.destroy_process_group()
 

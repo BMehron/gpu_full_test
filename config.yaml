@@ -23,23 +23,31 @@ master_port: 29500
 remote_work_dir: "~/gpu_full_test"
 
 tests:
-  # Per-GPU tests
-  memory_fraction: 0.5             # Fraction of VRAM to allocate (0.5 = 50%)
-  matmul_size: 8192                # Square matrix dim for MatMul / TFLOPS tests
-  bandwidth_data_gb: 2.0           # Payload size for PCIe H2D/D2H tests
-  hbm_data_gb: 4.0                 # Payload size for HBM bandwidth test
-  tflops_iters: 200                # Iterations for BF16 TFLOPS benchmark
-  h200_peak_bf16_tflops: 1979.0   # H200 rated peak BF16 TFLOPS (spec sheet)
+  # ── Per-GPU ────────────────────────────────────────────────────────────────
+  memory_fraction: 0.5              # Fraction of VRAM to allocate
+  matmul_size: 8192                 # Square matrix dim for MatMul / TFLOPS tests
+  bandwidth_data_gb: 2.0            # Payload size for PCIe H2D/D2H tests
+  hbm_data_gb: 4.0                  # Payload size for HBM bandwidth test
+  tflops_iters: 200                 # Iterations for BF16 TFLOPS benchmark
+  h200_peak_bf16_tflops: 989.0      # H200 dense BF16 TFLOPS (sparse peak is 1979)
 
-  # Intra-node distributed tests
-  nvlink_data_gb: 4.0              # Payload size for NVLink P2P tests
+  # Per-GPU thresholds
+  matmul_err_threshold: 0.02        # Max Frobenius relative error for BF16 matmul
+  mixed_precision_err_threshold: 0.005  # Max FP32-vs-FP64 relative error
+  tflops_threshold_pct: 65.0        # Min % of rated peak for BF16 TFLOPS
+  hbm_threshold_tbps: 2.5           # Min HBM bandwidth (TB/s)
+  pcie_threshold_gbps: 25.0         # Min PCIe bandwidth (GB/s)
 
-  # Both intra- and inter-node collective tests
-  allreduce_sizes_mb: [64, 256, 1024, 4096]   # AllReduce sweep sizes (MB)
+  # ── Collective tests (single- and multi-node) ──────────────────────────────
+  allreduce_sizes_mb: [64, 256, 1024]   # AllReduce sweep sizes (MB)
+  allreduce_threshold_gbps: 2.0         # Min bus bandwidth (GB/s) — set higher for IB clusters
 
-  # DDP training test
-  ddp_hidden_size: 4096            # MLP hidden dimension
-  ddp_steps: 50                    # Training steps to run
+  # ── DDP training (all setups) ──────────────────────────────────────────────
+  ddp_hidden_size: 4096             # MLP hidden dimension
+  ddp_batch_size: 64                # Batch size per rank
+  ddp_steps: 100                    # Training steps to run
+  ddp_loss_drop_threshold: 0.5      # Min relative loss drop required to PASS (0.5 = 50%)
+  training_seed: 42                 # Fixed seed for model init and data generation
 
 # Where to save collected results locally
 results_dir: "./results"
