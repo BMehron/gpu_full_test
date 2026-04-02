@@ -197,9 +197,7 @@ async def run_single_node(node: Dict, gpus_per_node: int,
            f"--output {out_remote}")
 
     print(f"\n  [{host}] Running single-node tests …")
-    rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=600)
-    for line in stdout.splitlines():
-        print(f"  [{host}] {line}")
+    rc, stderr = await ssh_stream(host, user, key, cmd, timeout=600, prefix=f"  [{host}] ")
     if rc != 0:
         print(f"  [{host}] single_node FAILED:\n{stderr}")
         return {"host": host, "error": stderr}
