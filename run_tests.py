@@ -247,12 +247,11 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
 
-        print(f"  [{host}] Launching multi-node torchrun (node_rank={idx}) …")
-        rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=900)
-        for line in stdout.splitlines():
-            print(f"  [{host}] {line}")
+        print(f"  [{host}] Launching multi-node torchrun (node_rank={idx}) …", flush=True)
+        rc, stderr = await ssh_stream(host, user, key, cmd, timeout=900,
+                                      prefix=f"  [{host}] ")
         if rc != 0:
-            print(f"  [{host}] multi_node FAILED:\n{stderr}")
+            print(f"  [{host}] multi_node FAILED:\n{stderr}", flush=True)
         return rc, host
 
     print(f"\n=== Multi-Node Tests ({n_nodes} nodes × {gpus_per_node} GPUs) ===")
