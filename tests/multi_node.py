@@ -15,10 +15,9 @@ NODE_RANK=0 is the master node (first in config).
 import argparse
 import json
 import os
-import sys
 import time
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -41,10 +40,10 @@ def result(name, status, metrics=None, details="", error=""):
 
 def init_dist():
     dist.init_process_group(backend="nccl")
-    rank  = dist.get_rank()
-    world = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    node_rank  = int(os.environ.get("NODE_RANK", 0))
+    rank         = dist.get_rank()
+    world        = dist.get_world_size()
+    local_rank   = int(os.environ.get("LOCAL_RANK", 0))
+    node_rank    = int(os.environ.get("NODE_RANK", 0))
     gpus_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
     torch.cuda.set_device(local_rank)
     return rank, world, local_rank, node_rank, gpus_per_node
@@ -66,7 +65,7 @@ def all_gather_scalar(val, rank, world):
 # Test: Cross-node AllReduce correctness
 # ---------------------------------------------------------------------------
 
-def test_allreduce_correctness(rank, world, local_rank, node_rank):
+def test_allreduce_correctness(rank, world, local_rank):
     """
     Each rank contributes (rank+1). Expected sum = world*(world+1)/2.
     Tested for fp32 and bf16.
@@ -104,12 +103,12 @@ def test_allreduce_correctness(rank, world, local_rank, node_rank):
 
 def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
     """
-    Measures inter-node AllReduce bus bandwidth.
-    For 3 nodes × 8 GPUs = 24 ranks. Threshold: 20 GB/s bus BW
-    (network-limited at 400 Gb/s IB HDR; 20 GB/s is ~40% utilisation of 50 GB/s line rate).
+    Measures inter-node AllReduce bus bandwidth at multiple payload sizes.
+    Bus BW formula: 2*(N-1)/N * size / time.
+    Threshold: 20 GB/s (conservative for 400 Gb/s IB / RoCE interconnect).
     """
     if sizes_mb is None:
-        sizes_mb = [64, 256, 1024, 4096]
+        sizes_mb = [64, 256, 1024]
 
     try:
         dev = f"cuda:{local_rank}"
@@ -142,7 +141,7 @@ def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
             return None
 
         min_bw = min(bw_results.values())
-        threshold = 20.0  # GB/s bus BW (inter-node, network-limited)
+        threshold = 20.0
         status = PASS if min_bw >= threshold else WARN
         details = " | ".join(f"{s}MB→{b}GB/s" for s, b in bw_results.items())
         return result("allreduce_bandwidth_multi_node", status,
@@ -156,103 +155,14 @@ def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
 
 
 # ---------------------------------------------------------------------------
-# Test: Cross-node AllGather bandwidth
-# ---------------------------------------------------------------------------
-
-def test_allgather_bandwidth(rank, world, local_rank, size_mb=512):
-    try:
-        dev = f"cuda:{local_rank}"
-        n = int(size_mb * 1024**2) // 4
-        send_t = torch.ones(n, dtype=torch.float32, device=dev)
-        recv_ts = [torch.empty(n, dtype=torch.float32, device=dev) for _ in range(world)]
-
-        for _ in range(3):
-            dist.all_gather(recv_ts, send_t)
-        barrier_sync(rank, world)
-
-        iters = 5
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            dist.all_gather(recv_ts, send_t)
-        torch.cuda.synchronize()
-        barrier_sync(rank, world)
-        elapsed = time.perf_counter() - t0
-
-        algbw = size_mb * 1024**2 * (world - 1) / world * iters / elapsed / 1e9
-
-        del send_t, recv_ts
-        torch.cuda.empty_cache()
-
-        if rank != 0:
-            return None
-
-        threshold = 10.0
-        status = PASS if algbw >= threshold else WARN
-        return result("allgather_bandwidth_multi_node", status,
-                      metrics={"algbw_gbps": round(algbw, 1), "size_mb": size_mb,
-                                "threshold_gbps": threshold},
-                      details=f"algbw {algbw:.1f} GB/s for {size_mb}MB payload")
-    except Exception:
-        if rank == 0:
-            return result("allgather_bandwidth_multi_node", FAIL, error=traceback.format_exc())
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Test: Cross-node ReduceScatter bandwidth
-# ---------------------------------------------------------------------------
-
-def test_reduce_scatter_bandwidth(rank, world, local_rank, size_mb=512):
-    try:
-        dev = f"cuda:{local_rank}"
-        n_per_rank = int(size_mb * 1024**2) // 4
-        n_total = n_per_rank * world
-        send_t = torch.ones(n_total, dtype=torch.float32, device=dev)
-        recv_t = torch.empty(n_per_rank, dtype=torch.float32, device=dev)
-
-        for _ in range(3):
-            dist.reduce_scatter_tensor(recv_t, send_t)
-        barrier_sync(rank, world)
-
-        iters = 5
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            dist.reduce_scatter_tensor(recv_t, send_t)
-        torch.cuda.synchronize()
-        barrier_sync(rank, world)
-        elapsed = time.perf_counter() - t0
-
-        algbw = n_per_rank * 4 * iters / elapsed / 1e9
-
-        del send_t, recv_t
-        torch.cuda.empty_cache()
-
-        if rank != 0:
-            return None
-
-        threshold = 10.0
-        status = PASS if algbw >= threshold else WARN
-        return result("reduce_scatter_bandwidth_multi_node", status,
-                      metrics={"algbw_gbps": round(algbw, 1), "size_mb": size_mb,
-                                "threshold_gbps": threshold},
-                      details=f"algbw {algbw:.1f} GB/s for {size_mb}MB payload")
-    except Exception:
-        if rank == 0:
-            return result("reduce_scatter_bandwidth_multi_node", FAIL, error=traceback.format_exc())
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Test: Cross-node point-to-point bandwidth (node 0 → node 1)
 # ---------------------------------------------------------------------------
 
-def test_cross_node_p2p_bandwidth(rank, world, local_rank, node_rank, gpus_per_node,
-                                   data_gb=4.0):
+def test_cross_node_p2p_bandwidth(rank, world, local_rank, gpus_per_node, data_gb=4.0):
     """
-    Rank 0 (node 0, GPU 0) sends large tensor to rank gpus_per_node (node 1, GPU 0).
+    Rank 0 (node 0, GPU 0) sends a large tensor to rank gpus_per_node (node 1, GPU 0).
     Measures unidirectional cross-node network bandwidth.
+    Threshold: 20 GB/s (~40% of 400 Gb/s IB line rate).
     """
     try:
         dev = f"cuda:{local_rank}"
@@ -268,8 +178,7 @@ def test_cross_node_p2p_bandwidth(rank, world, local_rank, node_rank, gpus_per_n
         recv_t = torch.empty(n, dtype=torch.float32, device=dev) if rank == dst_rank else None
 
         # Warmup
-        iters_warm = 2
-        for _ in range(iters_warm):
+        for _ in range(2):
             if rank == src_rank:
                 dist.send(send_t[:1024], dst=dst_rank)
             else:
@@ -296,7 +205,6 @@ def test_cross_node_p2p_bandwidth(rank, world, local_rank, node_rank, gpus_per_n
             return None
 
         bw_gbps = data_gb * iters / elapsed
-        # 400 Gb/s InfiniBand = 50 GB/s; 200 Gb/s HDR = 25 GB/s
         threshold = 20.0
         status = PASS if bw_gbps >= threshold else WARN
         return result("cross_node_p2p_bandwidth", status,
@@ -306,42 +214,6 @@ def test_cross_node_p2p_bandwidth(rank, world, local_rank, node_rank, gpus_per_n
     except Exception:
         if rank == 0:
             return result("cross_node_p2p_bandwidth", FAIL, error=traceback.format_exc())
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Test: Barrier latency (measures synchronisation overhead)
-# ---------------------------------------------------------------------------
-
-def test_barrier_latency(rank, world):
-    try:
-        # Warmup
-        for _ in range(20):
-            dist.barrier()
-        torch.cuda.synchronize()
-
-        iters = 200
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            dist.barrier()
-        torch.cuda.synchronize()
-        elapsed = time.perf_counter() - t0
-
-        latency_ms = elapsed / iters * 1000
-
-        if rank != 0:
-            return None
-
-        threshold_ms = 10.0  # 10 ms is generous for 3-node cluster
-        status = PASS if latency_ms < threshold_ms else WARN
-        return result("barrier_latency", status,
-                      metrics={"latency_ms": round(latency_ms, 3),
-                                "threshold_ms": threshold_ms,
-                                "iters": iters},
-                      details=f"barrier latency {latency_ms:.3f} ms | threshold {threshold_ms} ms")
-    except Exception:
-        if rank == 0:
-            return result("barrier_latency", FAIL, error=traceback.format_exc())
         return None
 
 
@@ -364,10 +236,11 @@ class SimpleMLP(nn.Module):
 
 def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size=64):
     """
-    Multi-node DDP training loop. Same checks as single-node:
-    - Loss must decrease
-    - Gradient norms must be identical across ALL ranks (cross-node allreduce)
-    - Reports cross-node throughput
+    Multi-node DDP training loop:
+    1. Runs `steps` forward+backward+optimizer steps.
+    2. Verifies loss drops by ≥50% (linear target y = X @ w is perfectly learnable).
+    3. Checks gradient norms are identical across ALL ranks (cross-node allreduce).
+    4. Reports cross-node throughput (samples/s).
     """
     try:
         device = torch.device(f"cuda:{local_rank}")
@@ -423,17 +296,17 @@ def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size
         if rank != 0:
             return None
 
-        loss_decreased = last_loss < first_loss
-        status = PASS if (loss_decreased and grad_sync_ok) else FAIL
+        relative_drop = (first_loss - last_loss) / (first_loss + 1e-8)
+        status = PASS if (relative_drop >= 0.5 and grad_sync_ok) else FAIL
         return result("ddp_training_multi_node", status,
                       metrics={"first_loss": round(first_loss, 6),
                                 "last_loss": round(last_loss, 6),
-                                "loss_decreased": loss_decreased,
+                                "relative_drop_pct": round(relative_drop * 100, 1),
                                 "grad_sync_ok": grad_sync_ok,
                                 "throughput_samples_per_s": round(throughput, 1),
                                 "world_size": world,
                                 "nodes": world // 8},
-                      details=f"loss {first_loss:.4f}→{last_loss:.4f} | "
+                      details=f"loss {first_loss:.4f}→{last_loss:.4f} ({relative_drop*100:.1f}% drop) | "
                               f"grad_sync {'OK' if grad_sync_ok else 'FAIL'} | "
                               f"{throughput:.0f} samples/s across {world} GPUs")
     except Exception:
@@ -480,7 +353,11 @@ def main():
             print(f"  [{tag}] {r['name']:<45} {msg}", flush=True)
         return r
 
-    run(lambda: test_allreduce_correctness(rank, world, local_rank, node_rank))
+    run(lambda: test_allreduce_correctness(rank, world, local_rank))
+    run(lambda: test_allreduce_bandwidth(rank, world, local_rank,
+                                          sizes_mb=cfg.get("allreduce_sizes_mb", [64, 256, 1024])))
+    run(lambda: test_cross_node_p2p_bandwidth(rank, world, local_rank, gpus_per_node,
+                                               data_gb=cfg.get("bandwidth_data_gb", 4.0)))
     run(lambda: test_ddp_training(rank, world, local_rank,
                                    hidden=cfg.get("ddp_hidden_size", 4096),
                                    steps=cfg.get("ddp_steps", 20)))
