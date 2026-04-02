@@ -116,10 +116,10 @@ async def deploy_to_node(node: Dict, repo_url: str, work_dir: str) -> bool:
 async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
                                work_dir: str, cfg: Dict,
                                results_dir: Path) -> List[Dict]:
-    """Launch per_gpu.py for each GPU in parallel on one node."""
-    host = node["host"]
-    user = node["user"]
-    key  = node["key_file"]
+    """Run per_gpu.py sequentially (one GPU at a time) for accurate tflops measurement."""
+    host     = node["host"]
+    user     = node["user"]
+    key      = node["key_file"]
     cfg_json = json.dumps(cfg).replace('"', '\\"')
 
     async def run_one(gpu_id):
@@ -131,7 +131,7 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
         rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=300)
         print(stdout, end="", flush=True)
         if rc != 0:
-            print(f"  [{host}] GPU{gpu_id} per_gpu FAILED:\n{stderr}")
+            print(f"  [{host}] GPU{gpu_id} FAILED:\n{stderr}")
             return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}
         local_out = results_dir / f"{host}_gpu{gpu_id}.json"
         rc2, err2 = await scp_from(host, user, key, out_remote, str(local_out))
@@ -141,8 +141,10 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
         with open(local_out) as f:
             return json.load(f)
 
-    tasks = [run_one(g) for g in gpu_ids]
-    return await asyncio.gather(*tasks)
+    results = []
+    for gpu_id in gpu_ids:
+        results.append(await run_one(gpu_id))
+    return results
 
 
 # ---------------------------------------------------------------------------

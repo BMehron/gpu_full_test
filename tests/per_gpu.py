@@ -267,7 +267,7 @@ def test_tflops_bf16(gpu_id: int, iters: int = 200, size: int = 8192,
         del A, B
         torch.cuda.empty_cache()
 
-        threshold_pct = 30.0  # All 8 GPUs run in parallel; full utilisation not expected
+        threshold_pct = 70.0
         status = PASS if util >= threshold_pct else WARN
         return result("tflops_bf16", status,
                       metrics={"achieved_tflops": round(achieved, 1),
@@ -304,7 +304,7 @@ def test_mixed_precision_correctness(gpu_id: int) -> Dict:
         out = torch.mm(A_g.float(), B_g.float()).cpu()
 
         rel_err = (out - ref).norm().item() / (ref.norm().item() + 1e-8)
-        threshold = 0.005  # FP32 vs FP64: < 0.5% expected for 512×512 matmul
+        threshold = 0.001  # FP32 vs FP64: < 0.1% expected
         status = PASS if rel_err < threshold else FAIL
 
         return result("mixed_precision_correctness", status,
