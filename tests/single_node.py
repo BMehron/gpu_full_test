@@ -524,6 +524,9 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
 
         throughput = batch_size * steps * world / elapsed
 
+        del ddp_model, model, optimizer, X, y, w
+        torch.cuda.empty_cache()
+
         if rank != 0:
             return None
 
