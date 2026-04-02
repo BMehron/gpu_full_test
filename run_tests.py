@@ -129,20 +129,20 @@ async def run_per_gpu_on_node(node: Dict, gpu_ids: List[int],
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
         rc, stdout, stderr = await ssh(host, user, key, cmd, timeout=300)
+        print(stdout, end="", flush=True)
         if rc != 0:
-            return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}, stdout
+            print(f"  [{host}] GPU{gpu_id} per_gpu FAILED:\n{stderr}")
+            return {"gpu_id": gpu_id, "error": stderr, "tests": [], "summary": {}}
         local_out = results_dir / f"{host}_gpu{gpu_id}.json"
         rc2, err2 = await scp_from(host, user, key, out_remote, str(local_out))
         if rc2 != 0:
-            return {"gpu_id": gpu_id, "error": err2, "tests": [], "summary": {}}, stdout
+            print(f"  [{host}] GPU{gpu_id} scp failed: {err2}")
+            return {"gpu_id": gpu_id, "error": err2, "tests": [], "summary": {}}
         with open(local_out) as f:
-            return json.load(f), stdout
+            return json.load(f)
 
-    pairs = await asyncio.gather(*[run_one(g) for g in gpu_ids])
-    # Print all GPU output for this node together, sorted by gpu_id
-    for data, stdout in sorted(pairs, key=lambda p: p[0].get("gpu_id", 0)):
-        print(stdout, end="", flush=True)
-    return [data for data, _ in pairs]
+    tasks = [run_one(g) for g in gpu_ids]
+    return await asyncio.gather(*tasks)
 
 
 # ---------------------------------------------------------------------------
