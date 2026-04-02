@@ -206,6 +206,8 @@ async def run_single_node(node: Dict, gpus_per_node: int,
     rc2, err2 = await scp_from(host, user, key, out_remote, str(local_out))
     if rc2 != 0:
         return {"host": host, "error": err2}
+    await scp_from(host, user, key, out_remote.replace(".json", "_loss.png"),
+                   str(local_out).replace(".json", "_loss.png"))
 
     with open(local_out) as f:
         data = json.load(f)
@@ -245,9 +247,8 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
                f"--nnodes={n_nodes} "
                f"--nproc_per_node={gpus_per_node} "
                f"--node_rank={idx} "
-               f"--rdzv_backend=c10d "
-               f"--rdzv_endpoint={master_ip}:{master_port} "
-               f"--rdzv_id=gpu_test_suite "
+               f"--master_addr={master_ip} "
+               f"--master_port={master_port} "
                f"tests/multi_node.py "
                f"--config \"{cfg_json}\" "
                f"--output {out_remote}")
@@ -276,6 +277,9 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
                               master_node["key_file"], out_remote, str(local_out))
     if rc != 0:
         return {"error": f"scp from master failed: {err}"}
+    await scp_from(master_node["host"], master_node["user"], master_node["key_file"],
+                   out_remote.replace(".json", "_loss.png"),
+                   str(local_out).replace(".json", "_loss.png"))
 
     with open(local_out) as f:
         return json.load(f)

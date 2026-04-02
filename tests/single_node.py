@@ -17,6 +17,25 @@ import time
 import traceback
 from typing import Dict, List, Optional
 
+
+def save_loss_plot(losses: List[float], title: str, output_json_path: str):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(losses)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("MSE Loss")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plot_path = output_json_path.replace(".json", "_loss.png")
+        fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Loss plot saved: {plot_path}", flush=True)
+    except ImportError:
+        pass
+
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -132,6 +151,7 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
         first_loss = None
         last_loss = None
         grad_sync_ok = True
+        losses = []
 
         barrier_sync(rank, world)
         t0 = time.perf_counter()
@@ -160,6 +180,7 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
             if first_loss is None:
                 first_loss = lv
             last_loss = lv
+            losses.append(round(lv, 6))
 
         torch.cuda.synchronize()
         barrier_sync(rank, world)
@@ -182,7 +203,8 @@ def test_ddp_training(rank: int, world: int, hidden: int = 4096, steps: int = 50
                                 "grad_sync_ok": grad_sync_ok,
                                 "throughput_samples_per_s": round(throughput, 1),
                                 "steps": steps,
-                                "world_size": world},
+                                "world_size": world,
+                                "step_losses": losses},
                       details=f"loss {first_loss:.4f}→{last_loss:.4f} ({relative_drop*100:.1f}% drop) | "
                               f"grad_sync {'OK' if grad_sync_ok else 'FAIL'} | "
                               f"{throughput:.0f} samples/s")
@@ -249,6 +271,10 @@ def main():
         }
         with open(args.output, "w") as f:
             json.dump(output, f, indent=2)
+        for r in all_results:
+            losses = r.get("metrics", {}).get("step_losses")
+            if losses:
+                save_loss_plot(losses, r["name"], args.output)
 
 
 if __name__ == "__main__":

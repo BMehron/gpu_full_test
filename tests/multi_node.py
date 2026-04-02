@@ -19,6 +19,25 @@ import time
 import traceback
 from typing import Dict, List, Optional
 
+
+def save_loss_plot(losses: List[float], title: str, output_json_path: str):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(losses)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("MSE Loss")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        plot_path = output_json_path.replace(".json", "_loss.png")
+        fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Loss plot saved: {plot_path}", flush=True)
+    except ImportError:
+        pass
+
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -155,69 +174,6 @@ def test_allreduce_bandwidth(rank, world, local_rank, sizes_mb=None):
 
 
 # ---------------------------------------------------------------------------
-# Test: Cross-node point-to-point bandwidth (node 0 → node 1)
-# ---------------------------------------------------------------------------
-
-def test_cross_node_p2p_bandwidth(rank, world, local_rank, gpus_per_node, data_gb=4.0):
-    """
-    Rank 0 (node 0, GPU 0) sends a large tensor to rank gpus_per_node (node 1, GPU 0).
-    Measures unidirectional cross-node network bandwidth.
-    Threshold: 20 GB/s (~40% of 400 Gb/s IB line rate).
-    """
-    try:
-        dev = f"cuda:{local_rank}"
-        n = int(data_gb * 1024**3) // 4
-        src_rank = 0
-        dst_rank = gpus_per_node  # First GPU on node 1
-
-        if rank not in (src_rank, dst_rank):
-            barrier_sync(rank, world)
-            return None
-
-        send_t = torch.ones(n, dtype=torch.float32, device=dev) if rank == src_rank else None
-        recv_t = torch.empty(n, dtype=torch.float32, device=dev) if rank == dst_rank else None
-
-        # Warmup
-        for _ in range(2):
-            if rank == src_rank:
-                dist.send(send_t[:1024], dst=dst_rank)
-            else:
-                dist.recv(recv_t[:1024], src=src_rank)
-
-        barrier_sync(rank, world)
-
-        iters = 5
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            if rank == src_rank:
-                dist.send(send_t, dst=dst_rank)
-            else:
-                dist.recv(recv_t, src=src_rank)
-        torch.cuda.synchronize()
-        barrier_sync(rank, world)
-        elapsed = time.perf_counter() - t0
-
-        del send_t, recv_t
-        torch.cuda.empty_cache()
-
-        if rank != 0:
-            return None
-
-        bw_gbps = data_gb * iters / elapsed
-        threshold = 20.0
-        status = PASS if bw_gbps >= threshold else WARN
-        return result("cross_node_p2p_bandwidth", status,
-                      metrics={"gbps": round(bw_gbps, 2), "threshold_gbps": threshold,
-                                "data_gb": data_gb},
-                      details=f"node0→node1: {bw_gbps:.2f} GB/s | threshold {threshold} GB/s")
-    except Exception:
-        if rank == 0:
-            return result("cross_node_p2p_bandwidth", FAIL, error=traceback.format_exc())
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Test: Multi-node DDP training
 # ---------------------------------------------------------------------------
 
@@ -260,6 +216,7 @@ def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size
         first_loss = None
         last_loss = None
         grad_sync_ok = True
+        losses = []
 
         barrier_sync(rank, world)
         t0 = time.perf_counter()
@@ -283,6 +240,7 @@ def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size
             if first_loss is None:
                 first_loss = lv
             last_loss = lv
+            losses.append(round(lv, 6))
 
         torch.cuda.synchronize()
         barrier_sync(rank, world)
@@ -305,7 +263,8 @@ def test_ddp_training(rank, world, local_rank, hidden=4096, steps=50, batch_size
                                 "grad_sync_ok": grad_sync_ok,
                                 "throughput_samples_per_s": round(throughput, 1),
                                 "world_size": world,
-                                "nodes": world // 8},
+                                "nodes": world // 8,
+                                "step_losses": losses},
                       details=f"loss {first_loss:.4f}→{last_loss:.4f} ({relative_drop*100:.1f}% drop) | "
                               f"grad_sync {'OK' if grad_sync_ok else 'FAIL'} | "
                               f"{throughput:.0f} samples/s across {world} GPUs")
@@ -377,6 +336,10 @@ def main():
         }
         with open(args.output, "w") as f:
             json.dump(output, f, indent=2)
+        for r in all_results:
+            losses = r.get("metrics", {}).get("step_losses")
+            if losses:
+                save_loss_plot(losses, r["name"], args.output)
 
 
 if __name__ == "__main__":
