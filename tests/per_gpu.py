@@ -267,7 +267,7 @@ def test_tflops_bf16(gpu_id: int, iters: int = 200, size: int = 8192,
         del A, B
         torch.cuda.empty_cache()
 
-        threshold_pct = 70.0
+        threshold_pct = 65.0  # Dense BF16 GEMM; 70% minus ~5% wall-clock overhead
         status = PASS if util >= threshold_pct else WARN
         return result("tflops_bf16", status,
                       metrics={"achieved_tflops": round(achieved, 1),
@@ -281,7 +281,7 @@ def test_tflops_bf16(gpu_id: int, iters: int = 200, size: int = 8192,
 
 
 # ---------------------------------------------------------------------------
-# Test: Tensor Core mixed-precision correctness (FP32 accumulation)
+# Test: Tensor Core mixed-precisigiton correctness (FP32 accumulation)
 # ---------------------------------------------------------------------------
 
 def test_mixed_precision_correctness(gpu_id: int) -> Dict:
