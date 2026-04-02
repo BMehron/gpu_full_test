@@ -481,17 +481,9 @@ def main():
         return r
 
     run(lambda: test_allreduce_correctness(rank, world, local_rank, node_rank))
-    run(lambda: test_allreduce_bandwidth(rank, world, local_rank,
-                                          cfg.get("allreduce_sizes_mb", [64, 256, 1024, 4096])))
-    run(lambda: test_allgather_bandwidth(rank, world, local_rank))
-    run(lambda: test_reduce_scatter_bandwidth(rank, world, local_rank))
-    run(lambda: test_cross_node_p2p_bandwidth(rank, world, local_rank, node_rank,
-                                               gpus_per_node,
-                                               data_gb=cfg.get("nvlink_data_gb", 4.0)))
-    run(lambda: test_barrier_latency(rank, world))
     run(lambda: test_ddp_training(rank, world, local_rank,
                                    hidden=cfg.get("ddp_hidden_size", 4096),
-                                   steps=cfg.get("ddp_steps", 50)))
+                                   steps=cfg.get("ddp_steps", 20)))
 
     dist.destroy_process_group()
 

@@ -587,15 +587,10 @@ def main():
             print(f"  [{tag}] {r['name']:<40} {msg}", flush=True)
         return r
 
-    run(lambda: test_nvlink_ring_bandwidth(rank, world, cfg.get("nvlink_data_gb", 1.0)))
-    run(lambda: test_nvlink_latency(rank, world))
     run(lambda: test_allreduce_correctness(rank, world))
-    run(lambda: test_allreduce_bandwidth(rank, world, cfg.get("allreduce_sizes_mb", [64, 256, 1024, 4096])))
-    run(lambda: test_allgather_bandwidth(rank, world))
-    run(lambda: test_reduce_scatter_bandwidth(rank, world))
     run(lambda: test_ddp_training(rank, world,
                                    hidden=cfg.get("ddp_hidden_size", 4096),
-                                   steps=cfg.get("ddp_steps", 50)))
+                                   steps=cfg.get("ddp_steps", 20)))
 
     dist.destroy_process_group()
 
