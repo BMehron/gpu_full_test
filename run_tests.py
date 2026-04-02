@@ -225,7 +225,12 @@ async def run_multi_node(nodes: List[Dict], gpus_per_node: int, master_port: int
     Node 0 is the rendezvous endpoint.
     Only node 0 writes the result file; we fetch it from there.
     """
-    master_ip = nodes[0]["host"]
+    # Use the node's own primary interface IP as the rdzv endpoint.
+    # Nodes often can't connect to their own external IP (cloud hairpin restriction),
+    # so we detect the internal IP automatically.
+    rc, internal_ip, _ = await ssh(nodes[0]["host"], nodes[0]["user"], nodes[0]["key_file"],
+                                   "hostname -I | awk '{print $1}'")
+    master_ip = internal_ip.strip() if rc == 0 and internal_ip.strip() else nodes[0]["host"]
     n_nodes   = len(nodes)
     cfg_json  = json.dumps(cfg).replace('"', '\\"')
 
